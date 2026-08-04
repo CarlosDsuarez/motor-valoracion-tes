@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motor-tes"
+version = "0.1.0"
+description = "Motor de valoración e inmunización de renta fija local: curva TES Nelson-Siegel-Svensson y pricer de forwards USD/COP"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "matplotlib>=3.8",
+    "requests>=2.31",
+    "openpyxl>=3.1",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Cruce de validación externo. QuantLib publica wheels abi3 (cp39-abi3) para macOS arm64.
+benchmark = ["QuantLib>=1.36"]
+# Fuente secundaria de TRM vía protocolo Socrata (SODA) de datos.gov.co.
+socrata = ["sodapy>=2.2"]
+# Integración viva con Excel: permite recalibrar la curva sin salir del libro.
+excel = ["xlwings>=0.31"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --strict-markers"
+markers = [
+    "red: requiere acceso a red (endpoints públicos de Banrep / datos.gov.co / NY Fed)",
+    "quantlib: requiere QuantLib instalado",
+    "manual: requiere el export manual del XLSX de curva cero cupón TES",
+]

@@ -1,0 +1,35 @@
+# Entorno virtual y artefactos de build
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Cachés de Python y herramientas
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Sistema operativo
+.DS_Store
+
+# Excel: archivos de bloqueo que crea al abrir un libro
+~$*.xlsx
+~$*.xlsm
+
+# El libro base lo regenera 'python -m motor_tes.cli excel' a partir de la curva
+# calibrada, así que no tiene sentido versionarlo. El .xlsm SÍ se versiona: lleva
+# los módulos VBA incorporados y es parte del entregable.
+excel/motor_tes_forwards.xlsx
+
+# Figuras del reporte de validación, regenerables
+validation/figs/*.png
+
+# NOTA sobre data/: los snapshots de data/raw/ y data/manifest.json SÍ se versionan
+# a propósito. Son la evidencia de procedencia (URL, timestamp, SHA256, origen
+# api/manual_export) que respalda cada número del reporte, y el export manual de la
+# curva TES no se puede volver a descargar de forma automática.
