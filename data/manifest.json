@@ -1,16 +1,16 @@
 {
   "fuentes": {
     "suameca_serie_1": {
-      "url": "https://suameca.banrep.gov.co/estadisticas-economicas-back/rest/estadisticaEconomicaRestService/consultaInformacionSerieXTipoDato?idSerie=1&tipoDato=1&cantDatos=2000",
-      "timestamp_utc": "2026-08-03T15:15:09+00:00",
-      "sha256": "17cddef1c18d584a40c835926694397422d657ae68bf0f37a2f0be005c928430",
-      "filas": 2000,
+      "url": "https://suameca.banrep.gov.co/estadisticas-economicas-back/rest/estadisticaEconomicaRestService/consultaInformacionSerieXTipoDato?idSerie=1&tipoDato=1&cantDatos=1",
+      "timestamp_utc": "2026-08-04T13:55:24+00:00",
+      "sha256": "c1e117dea04ffa1933751f736e3559f790bf575d1cbfc034d7d5852d14810616",
+      "filas": 1,
       "origen": "api",
       "archivo": "data/raw/suameca_serie_1.json"
     },
     "nyfed_sofr": {
       "url": "https://markets.newyorkfed.org/api/rates/secured/sofr/last/5.json",
-      "timestamp_utc": "2026-08-04T13:27:51+00:00",
+      "timestamp_utc": "2026-08-04T13:55:25+00:00",
       "sha256": "ea003ba33000be193b0c72f3f66210596473aaaf17cfcd594dc422429cb2e557",
       "filas": 5,
       "origen": "api",
@@ -18,7 +18,7 @@
     },
     "suameca_serie_241": {
       "url": "https://suameca.banrep.gov.co/estadisticas-economicas-back/rest/estadisticaEconomicaRestService/consultaInformacionSerieXTipoDato?idSerie=241&tipoDato=1&cantDatos=10",
-      "timestamp_utc": "2026-08-04T13:19:28+00:00",
+      "timestamp_utc": "2026-08-04T13:55:22+00:00",
       "sha256": "af92f3b7b734e9e724dea6ef48ecd8d59b6973087143f17930a9d40a4bbfd6fc",
       "filas": 10,
       "origen": "api",
@@ -26,7 +26,7 @@
     },
     "suameca_serie_242": {
       "url": "https://suameca.banrep.gov.co/estadisticas-economicas-back/rest/estadisticaEconomicaRestService/consultaInformacionSerieXTipoDato?idSerie=242&tipoDato=1&cantDatos=10",
-      "timestamp_utc": "2026-08-04T13:19:29+00:00",
+      "timestamp_utc": "2026-08-04T13:55:23+00:00",
       "sha256": "ab56456eaf7e8a4c89da5cbcb925f9592e9667cc3572832cf6e4c609d0da8e5b",
       "filas": 10,
       "origen": "api",
@@ -34,7 +34,7 @@
     },
     "suameca_serie_243": {
       "url": "https://suameca.banrep.gov.co/estadisticas-economicas-back/rest/estadisticaEconomicaRestService/consultaInformacionSerieXTipoDato?idSerie=243&tipoDato=1&cantDatos=10",
-      "timestamp_utc": "2026-08-04T13:19:29+00:00",
+      "timestamp_utc": "2026-08-04T13:55:23+00:00",
       "sha256": "b660923bb286b5353992632de0eb1e3b8fb6577eb24557a4e6318f9ff7bab030",
       "filas": 10,
       "origen": "api",
@@ -58,7 +58,7 @@
     },
     "curva_cero_cupon_tes_pesos": {
       "url": "https://suameca.banrep.gov.co/estadisticas-economicas/informacionSerie/640001/deuda_publica_tasas_cero_cupon_tes",
-      "timestamp_utc": "2026-08-04T13:19:30+00:00",
+      "timestamp_utc": "2026-08-04T13:55:23+00:00",
       "sha256": "d1180ebcec16a62e0c92406508c5b3b65928b1b14163426333604e69a39e0ff6",
       "filas": 5735,
       "origen": "manual_export",

@@ -13,6 +13,11 @@ están medidas y atribuidas a una causa concreta, no toleradas por umbral.
 
 ## Resultados
 
+> Los números de esta sección son una **fotografía al 2026-08-03**. Las fuentes se
+> actualizan a diario, así que para ver el estado vigente hay que regenerar el reporte:
+> `make validate` deja [`validation/reporte_validacion.md`](validation/reporte_validacion.md)
+> con procedencia, residuales, gráficos y el benchmark recalculados.
+
 ### Curva COP al 2026-08-03
 
 | Plazo | Tasa E.A. | Fuente |

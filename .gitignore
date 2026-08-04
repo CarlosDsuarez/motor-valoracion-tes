@@ -26,8 +26,8 @@ htmlcov/
 # los módulos VBA incorporados y es parte del entregable.
 excel/motor_tes_forwards.xlsx
 
-# Figuras del reporte de validación, regenerables
-validation/figs/*.png
+# Las figuras de validation/figs/ SÍ se versionan: el reporte las embebe y, sin
+# ellas, GitHub lo renderiza con imágenes rotas.
 
 # NOTA sobre data/: los snapshots de data/raw/ y data/manifest.json SÍ se versionan
 # a propósito. Son la evidencia de procedencia (URL, timestamp, SHA256, origen
