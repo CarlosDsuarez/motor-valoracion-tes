@@ -49,7 +49,7 @@ Private Const NOMBRE_RANGO_PARAMS As String = "NSS_PARAMS"
 
 ' Devuelve los seis parametros como array base 0: (b0, b1, b2, b3, L1, L2).
 ' Si paramsRange es Nothing, los toma del rango con nombre NSS_PARAMS.
-Private Function LeerParametros(Optional ByVal paramsRange As Range = Nothing) As Double()
+Private Function LeerParametros(Optional ByVal paramsRange As Range) As Double()
     Dim origen As Range
     Dim valores() As Double
     Dim celda As Range
@@ -118,7 +118,7 @@ End Function
 ' paramsRange: rango opcional con los seis parametros. Si se omite, se lee
 '              NSS_PARAMS del libro.
 Public Function TASA_CERO_CUPON(ByVal plazoAnios As Double, _
-                                Optional ByVal paramsRange As Range = Nothing) As Variant
+                                Optional ByVal paramsRange As Range) As Variant
     Dim p() As Double
     Dim x1 As Double, x2 As Double
 
@@ -141,7 +141,7 @@ End Function
 
 ' Factor de descuento DF(t) = (1 + z(t)) ^ -t.
 Public Function FACTOR_DESCUENTO(ByVal plazoAnios As Double, _
-                                 Optional ByVal paramsRange As Range = Nothing) As Variant
+                                 Optional ByVal paramsRange As Range) As Variant
     Dim z As Variant
 
     On Error GoTo Fallo
@@ -160,7 +160,7 @@ End Function
 
 ' Forward instantanea en t, por diferencias centradas sobre ln DF.
 Private Function ForwardInstantanea(ByVal t As Double, _
-                                    Optional ByVal paramsRange As Range = Nothing) As Variant
+                                    Optional ByVal paramsRange As Range) As Variant
     Dim h As Double, tIzq As Double, tDer As Double
     Dim dfIzq As Variant, dfDer As Variant
     Dim fContinua As Double
@@ -186,7 +186,7 @@ End Function
 ' Tasa forward efectiva anual implicita entre t1 y t2, por no arbitraje:
 '   (1 + f) ^ (t2 - t1) = DF(t1) / DF(t2)
 Public Function TASA_FORWARD(ByVal t1 As Double, ByVal t2 As Double, _
-                             Optional ByVal paramsRange As Range = Nothing) As Variant
+                             Optional ByVal paramsRange As Range) As Variant
     Dim df1 As Variant, df2 As Variant
 
     On Error GoTo Fallo
@@ -221,7 +221,7 @@ Private Function ValorPresenteBono(ByVal cupon As Double, _
                                    ByVal frecuencia As Long, _
                                    ByVal nominal As Double, _
                                    ByVal shift As Double, _
-                                   Optional ByVal paramsRange As Range = Nothing) As Double
+                                   Optional ByVal paramsRange As Range) As Double
     Dim p() As Double
     Dim paso As Double, cuponPeriodico As Double
     Dim t As Double, z As Double, x1 As Double, x2 As Double
@@ -256,7 +256,7 @@ Public Function VP_TES(ByVal cupon As Double, _
                        ByVal plazoAnios As Double, _
                        Optional ByVal frecuencia As Long = 1, _
                        Optional ByVal nominal As Double = 100#, _
-                       Optional ByVal paramsRange As Range = Nothing) As Variant
+                       Optional ByVal paramsRange As Range) As Variant
     On Error GoTo Fallo
     If plazoAnios <= 0 Or frecuencia <= 0 Then GoTo Fallo
     VP_TES = ValorPresenteBono(cupon, plazoAnios, frecuencia, nominal, 0#, paramsRange)
@@ -280,7 +280,7 @@ Public Function DV01_TES(ByVal cupon As Double, _
                          ByVal plazoAnios As Double, _
                          Optional ByVal frecuencia As Long = 1, _
                          Optional ByVal nominal As Double = 100#, _
-                         Optional ByVal paramsRange As Range = Nothing) As Variant
+                         Optional ByVal paramsRange As Range) As Variant
     Dim medioBp As Double
 
     On Error GoTo Fallo
@@ -303,7 +303,7 @@ Public Function DURACION_MOD_TES(ByVal cupon As Double, _
                                  ByVal plazoAnios As Double, _
                                  Optional ByVal frecuencia As Long = 1, _
                                  Optional ByVal nominal As Double = 100#, _
-                                 Optional ByVal paramsRange As Range = Nothing) As Variant
+                                 Optional ByVal paramsRange As Range) As Variant
     Dim vp As Variant, sensibilidad As Variant
 
     On Error GoTo Fallo

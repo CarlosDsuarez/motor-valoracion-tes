@@ -53,13 +53,19 @@ End Function
 ' Toma la tasa COP del argumento si vino, y si no la lee de la curva calibrada.
 Private Function ResolverTasaCop(ByVal plazoDias As Double, _
                                  ByVal tasaCop As Variant, _
-                                 Optional ByVal paramsRange As Range = Nothing) As Double
+                                 Optional ByVal paramsRange As Range) As Double
     Dim z As Variant
 
+    ' Excel manda un argumento salteado en el medio -por ejemplo
+    ' FORWARD_USDCOP(spot;dias;sofr;;params)- como Empty, no como Missing. Y en VBA
+    ' IsNumeric(Empty) devuelve True, asi que sin el chequeo de IsEmpty se valoraria
+    ' con tasa COP = 0 en lugar de leerla de la curva. Se descartan los dos casos.
     If Not IsMissing(tasaCop) Then
-        If IsNumeric(tasaCop) Then
-            ResolverTasaCop = CDbl(tasaCop)
-            Exit Function
+        If Not IsEmpty(tasaCop) Then
+            If IsNumeric(tasaCop) Then
+                ResolverTasaCop = CDbl(tasaCop)
+                Exit Function
+            End If
         End If
     End If
 
@@ -82,7 +88,7 @@ Public Function FORWARD_USDCOP(ByVal spot As Double, _
                                ByVal plazoDias As Double, _
                                ByVal tasaUsd As Double, _
                                Optional ByVal tasaCop As Variant, _
-                               Optional ByVal paramsRange As Range = Nothing) As Variant
+                               Optional ByVal paramsRange As Range) As Variant
     Dim iCop As Double
 
     On Error GoTo Fallo
@@ -105,7 +111,7 @@ Public Function FORWARD_USDCOP_SIMPLE(ByVal spot As Double, _
                                       ByVal plazoDias As Double, _
                                       ByVal tasaUsd As Double, _
                                       Optional ByVal tasaCop As Variant, _
-                                      Optional ByVal paramsRange As Range = Nothing) As Variant
+                                      Optional ByVal paramsRange As Range) As Variant
     Dim iCop As Double
 
     On Error GoTo Fallo
@@ -128,7 +134,7 @@ Public Function PUNTOS_FORWARD(ByVal spot As Double, _
                                ByVal plazoDias As Double, _
                                ByVal tasaUsd As Double, _
                                Optional ByVal tasaCop As Variant, _
-                               Optional ByVal paramsRange As Range = Nothing) As Variant
+                               Optional ByVal paramsRange As Range) As Variant
     Dim f As Variant
     On Error GoTo Fallo
     f = FORWARD_USDCOP(spot, plazoDias, tasaUsd, tasaCop, paramsRange)
@@ -145,7 +151,7 @@ Public Function DEVALUACION_IMPLICITA(ByVal spot As Double, _
                                       ByVal plazoDias As Double, _
                                       ByVal tasaUsd As Double, _
                                       Optional ByVal tasaCop As Variant, _
-                                      Optional ByVal paramsRange As Range = Nothing) As Variant
+                                      Optional ByVal paramsRange As Range) As Variant
     Dim f As Variant
     On Error GoTo Fallo
     If plazoDias <= 0 Then
@@ -168,7 +174,7 @@ End Function
 Public Function DELTA_SPOT_FWD(ByVal plazoDias As Double, _
                                ByVal tasaUsd As Double, _
                                Optional ByVal tasaCop As Variant, _
-                               Optional ByVal paramsRange As Range = Nothing) As Variant
+                               Optional ByVal paramsRange As Range) As Variant
     Dim iCop As Double
     On Error GoTo Fallo
     iCop = ResolverTasaCop(plazoDias, tasaCop, paramsRange)
@@ -185,7 +191,7 @@ Public Function DV01_COP_FWD(ByVal spot As Double, _
                              ByVal plazoDias As Double, _
                              ByVal tasaUsd As Double, _
                              Optional ByVal tasaCop As Variant, _
-                             Optional ByVal paramsRange As Range = Nothing) As Variant
+                             Optional ByVal paramsRange As Range) As Variant
     Dim iCop As Double, kUsd As Double
 
     On Error GoTo Fallo
@@ -208,7 +214,7 @@ Public Function DV01_USD_FWD(ByVal spot As Double, _
                              ByVal plazoDias As Double, _
                              ByVal tasaUsd As Double, _
                              Optional ByVal tasaCop As Variant, _
-                             Optional ByVal paramsRange As Range = Nothing) As Variant
+                             Optional ByVal paramsRange As Range) As Variant
     Dim iCop As Double, kCop As Double
 
     On Error GoTo Fallo
@@ -230,7 +236,7 @@ Public Function THETA_DIA_FWD(ByVal spot As Double, _
                               ByVal plazoDias As Double, _
                               ByVal tasaUsd As Double, _
                               Optional ByVal tasaCop As Variant, _
-                              Optional ByVal paramsRange As Range = Nothing) As Variant
+                              Optional ByVal paramsRange As Range) As Variant
     Dim hoy As Variant, manana As Variant
 
     On Error GoTo Fallo
@@ -253,7 +259,7 @@ Public Function BRECHA_CONVENCIONES_BPS(ByVal spot As Double, _
                                         ByVal plazoDias As Double, _
                                         ByVal tasaUsd As Double, _
                                         Optional ByVal tasaCop As Variant, _
-                                        Optional ByVal paramsRange As Range = Nothing) As Variant
+                                        Optional ByVal paramsRange As Range) As Variant
     Dim ea As Variant, simple As Variant
 
     On Error GoTo Fallo
