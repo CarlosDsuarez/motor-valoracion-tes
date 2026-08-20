@@ -1,4 +1,6 @@
-# Entorno virtual y artefactos de build
+# Entorno virtual y artefactos de build. '.venv' sin barra cubre también el caso
+# en que sea un symlink al venv del árbol principal, como pasa en un worktree.
+.venv
 .venv/
 venv/
 *.egg-info/
@@ -33,3 +35,12 @@ excel/motor_tes_forwards.xlsx
 # a propósito. Son la evidencia de procedencia (URL, timestamp, SHA256, origen
 # api/manual_export) que respalda cada número del reporte, y el export manual de la
 # curva TES no se puede volver a descargar de forma automática.
+
+# Cotizaciones licenciadas de un proveedor comercial. NO se versionan: este repo es
+# público y redistribuir la serie de precios violaría la licencia. Lo que sí va al
+# repo es data/instrumentos_tes.csv (RIC, cupón y vencimiento son hechos públicos de
+# un emisor soberano) y, en el reporte, resultados agregados: nunca la tabla de
+# precios ni los residuales instrumento por instrumento, que combinados con los
+# parámetros de la curva permitirían reconstruirla.
+data/privado/
+validation/privado/

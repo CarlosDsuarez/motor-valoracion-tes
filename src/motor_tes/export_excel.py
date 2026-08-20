@@ -35,6 +35,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.defined_name import DefinedName
 
 from motor_tes import config
+from motor_tes.calibracion_mercado import ResultadoCalibracionMercado
 from motor_tes.curva_nss import (
     NSSParams,
     ResultadoCalibracion,
@@ -117,6 +118,7 @@ def _hoja_parametros(
     spot: float,
     sofr: float,
     fecha_curva: date,
+    params_fondeo: NSSParams | None = None,
 ) -> None:
     """Escribe la hoja de parámetros y declara los rangos con nombre que lee el VBA."""
     hoja = wb.active
@@ -175,12 +177,35 @@ def _hoja_parametros(
         hoja.cell(row=i, column=1, value=clave)
         hoja.cell(row=i, column=2, value=valor)
 
+    fila_aviso = 18 + len(diagnostico) + 1
     if calibracion.es_interpolacion:
-        hoja["A25"] = (
+        hoja[f"A{fila_aviso}"] = (
             "AVISO: 0 grados de libertad. El modelo interpola en vez de ajustar, "
             "así que un RMSE nulo no es evidencia de calidad."
         )
-        hoja["A25"].font = Font(bold=True, color="C00000")
+        hoja[f"A{fila_aviso}"].font = Font(bold=True, color="C00000")
+
+    if params_fondeo is not None:
+        # Segunda curva. El libro lleva dos porque cada una sirve para algo distinto:
+        # NSS_PARAMS descuenta soberanos y es la que leen las UDFs por defecto;
+        # NSS_PARAMS_FONDEO es la interbancaria, que arranca en el overnight y es la
+        # base correcta para paridad cubierta. Las filas 29 a 34 están fijadas por el
+        # rango con nombre: no insertar nada antes.
+        hoja["A28"] = "Curva de fondeo (paridad cubierta)"
+        hoja["A28"].font = _ETIQUETA
+        for i, (etiqueta, valor) in enumerate(
+            zip(
+                ("beta0", "beta1", "beta2", "beta3", "lambda1", "lambda2"),
+                params_fondeo.to_array(),
+            ),
+            start=29,
+        ):
+            hoja.cell(row=i, column=1, value=etiqueta).font = _ETIQUETA
+            hoja.cell(row=i, column=2, value=float(valor)).number_format = "0.00000000"
+        hoja["C29"] = (
+            "Pasar NSS_PARAMS_FONDEO como segundo argumento a las UDFs de forward. La "
+            "curva soberana de NSS_PARAMS extrapola mal en plazos cortos."
+        )
 
     hoja.column_dimensions["A"].width = 34
     hoja.column_dimensions["B"].width = 18
@@ -191,15 +216,55 @@ def _hoja_parametros(
         ("TRM_SPOT", "Parametros!$B$13"),
         ("SOFR_ACTUAL", "Parametros!$B$14"),
         ("CURVA_FECHA", "Parametros!$B$15"),
+        ("NSS_PARAMS_FONDEO", "Parametros!$B$29:$B$34"),
     ):
         wb.defined_names.add(DefinedName(nombre, attr_text=referencia))
 
 
-def _hoja_nodos(
-    wb: Workbook, calibracion: ResultadoCalibracion, nodos: pd.DataFrame
-) -> None:
-    """Nodos de mercado usados, con el residual que dejó la calibración."""
+def _hoja_nodos(wb: Workbook, calibracion, nodos: pd.DataFrame | None) -> None:
+    """Insumos de la calibración, con el detalle que la licencia permita publicar.
+
+    Cuando la curva se calibró sobre nodos publicados —tasas de acceso abierto— la hoja
+    trae el detalle nodo por nodo. Cuando se calibró contra precios de un proveedor
+    comercial, trae **solo agregados**: este libro se versiona con las macros
+    incorporadas, y el residual de cada instrumento, combinado con los parámetros NSS
+    que van en la hoja de parámetros, permitiría reconstruir la cotización.
+
+    Args:
+        wb: Libro donde crear la hoja.
+        calibracion: Resultado de la calibración, de nodos o de precios.
+        nodos: Nodos de mercado si los hubo; ``None`` si se calibró contra precios.
+    """
     hoja = wb.create_sheet("Nodos")
+    if nodos is None:
+        resumen = pd.DataFrame(
+            {
+                "metrica": [
+                    "instrumentos ajustados",
+                    "grados de libertad",
+                    "rmse_bps",
+                    "max_residual_abs_bps",
+                    "plazo_minimo_anios",
+                    "plazo_maximo_anios",
+                ],
+                "valor": [
+                    len(calibracion.plazos),
+                    calibracion.grados_libertad,
+                    round(calibracion.rmse_bps, 4),
+                    round(float(np.max(np.abs(calibracion.residuales_bps))), 4),
+                    round(float(np.min(calibracion.plazos)), 4),
+                    round(float(np.max(calibracion.plazos)), 4),
+                ],
+            }
+        )
+        _escribir_tabla(hoja, resumen)
+        hoja["D1"] = (
+            "Calibrada contra precios licenciados: va el agregado, no el detalle por "
+            "instrumento. Publicarlo junto a los parámetros NSS reconstruiría la "
+            "cotización."
+        )
+        return
+
     tabla = pd.DataFrame(
         {
             "plazo_anios": calibracion.plazos,
@@ -231,7 +296,16 @@ def _hoja_curva(wb: Workbook, params: NSSParams) -> None:
 
 
 def _hoja_forwards(wb: Workbook, params: NSSParams, spot: float, sofr: float) -> None:
-    """Muestra de forwards USD/COP con sus sensibilidades."""
+    """Muestra de forwards USD/COP con sus sensibilidades.
+
+    Args:
+        wb: Libro donde crear la hoja.
+        params: Curva COP de **fondeo**. La paridad cubierta se financia a tasa
+            interbancaria, y esa curva arranca en el overnight; la curva soberana de
+            descuento no cubre los plazos cortos de esta tabla.
+        spot: TRM contado.
+        sofr: SOFR vigente.
+    """
     hoja = wb.create_sheet("Forwards")
     filas = []
     for dias in PLAZOS_FORWARD_DIAS:
@@ -358,22 +432,31 @@ def _hoja_validacion(wb: Workbook, params: NSSParams, spot: float, sofr: float) 
 
 
 def exportar_libro(
-    calibracion: ResultadoCalibracion,
-    nodos: pd.DataFrame,
+    calibracion: ResultadoCalibracion | ResultadoCalibracionMercado,
+    nodos: pd.DataFrame | None,
     spot: float,
     sofr: float,
     fecha_curva: date,
     ruta: Path | None = None,
+    params_fondeo: NSSParams | None = None,
 ) -> Path:
     """Genera el libro Excel con la curva calibrada y los rangos con nombre.
 
     Args:
-        calibracion: Resultado de :func:`~motor_tes.curva_nss.calibrar_nss`.
+        calibracion: Resultado de :func:`~motor_tes.curva_nss.calibrar_nss` o de
+            :func:`~motor_tes.calibracion_mercado.calibrar_desde_precios`.
         nodos: Nodos de mercado usados, con columna ``fuente`` si está disponible.
+            ``None`` cuando la curva se calibró contra precios licenciados, en cuyo
+            caso la hoja de insumos lleva solo agregados.
         spot: TRM contado, en pesos por dólar.
         sofr: SOFR vigente, en decimal.
         fecha_curva: Fecha de referencia de la curva.
         ruta: Destino del ``.xlsx``. Por defecto :data:`RUTA_LIBRO_BASE`.
+        params_fondeo: Curva de fondeo para la hoja de forwards. Si se omite se usa la
+            misma curva de ``calibracion``, lo que solo es correcto cuando esa curva
+            cubre plazos cortos. Cuando se exporta la curva soberana de descuento hay
+            que pasar acá la de fondeo: la soberana extrapola mal por debajo de su
+            instrumento más corto y los forwards del libro llegan a 30 días.
 
     Returns:
         Ruta del libro escrito.
@@ -382,10 +465,10 @@ def exportar_libro(
     ruta.parent.mkdir(parents=True, exist_ok=True)
 
     wb = Workbook()
-    _hoja_parametros(wb, calibracion, spot, sofr, fecha_curva)
+    _hoja_parametros(wb, calibracion, spot, sofr, fecha_curva, params_fondeo)
     _hoja_nodos(wb, calibracion, nodos)
     _hoja_curva(wb, calibracion.params)
-    _hoja_forwards(wb, calibracion.params, spot, sofr)
+    _hoja_forwards(wb, params_fondeo or calibracion.params, spot, sofr)
     _hoja_validacion(wb, calibracion.params, spot, sofr)
     wb.save(ruta)
     return ruta

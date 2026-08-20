@@ -30,9 +30,25 @@ RAIZ_PROYECTO: Final[Path] = Path(__file__).resolve().parents[2]
 DIR_DATOS: Final[Path] = RAIZ_PROYECTO / "data"
 DIR_DATOS_CRUDOS: Final[Path] = DIR_DATOS / "raw"
 RUTA_MANIFEST: Final[Path] = DIR_DATOS / "manifest.json"
-RUTA_TES_REFERENCIA: Final[Path] = DIR_DATOS / "tes_referencia.yaml"
+#: Fichas de referencia de los instrumentos soberanos: RIC, cupón y vencimiento.
+#: Son hechos públicos de un emisor soberano, así que este archivo sí se versiona.
+RUTA_INSTRUMENTOS_TES: Final[Path] = DIR_DATOS / "instrumentos_tes.csv"
+
+#: Cotizaciones licenciadas. NO se versionan: los precios son de un proveedor
+#: comercial y el repositorio es público. El manifest registra su SHA256 y su
+#: cantidad de filas para que la procedencia siga siendo verificable sin publicar
+#: el dato.
+DIR_DATOS_PRIVADOS: Final[Path] = DIR_DATOS / "privado"
+NOMBRE_CSV_COTIZACIONES_TES: Final[str] = "cotizaciones_tes.csv"
+RUTA_COTIZACIONES_TES: Final[Path] = DIR_DATOS_PRIVADOS / NOMBRE_CSV_COTIZACIONES_TES
 DIR_VALIDACION: Final[Path] = RAIZ_PROYECTO / "validation"
 DIR_FIGURAS: Final[Path] = DIR_VALIDACION / "figs"
+
+#: Reportes que no se versionan porque permiten reconstruir el dato licenciado.
+#: El residual por instrumento, combinado con los parámetros publicados de la
+#: curva, devuelve el precio observado: publicarlo equivale a publicar la
+#: cotización. En el repositorio van agregados.
+DIR_VALIDACION_PRIVADA: Final[Path] = DIR_VALIDACION / "privado"
 DIR_EXCEL: Final[Path] = RAIZ_PROYECTO / "excel"
 
 #: Nombre con el que el portal descarga el export manual de la curva cero cupón TES.
@@ -204,6 +220,27 @@ RMSE_MAXIMO_BPS: Final[float] = 5.0
 #: Por debajo de este cociente ``t / lambda`` se usa la expansión de Taylor de los
 #: factores de carga NSS para evitar la indeterminación 0/0 en ``t -> 0``.
 UMBRAL_TAYLOR: Final[float] = 1e-6
+
+#: Plazo mínimo, en años, para que un instrumento entre a la calibración contra
+#: precios. Las letras muy cortas del mercado COP cotizan en un segmento de dinero
+#: que no se conecta suavemente con la curva de bonos: en la muestra de referencia
+#: hay un salto de ~150 bps entre el instrumento a 0.17 años y el de 0.44. Una NSS
+#: no puede atravesar ese quiebre, y forzarla degrada el ajuste en TODA la curva
+#: (RMSE 32 bps contra 3.8, y el nodo de 2 años se desvía 24 bps). El corte va en
+#: medio del hueco: los instrumentos por debajo se valoran y reportan, pero no
+#: entran al objetivo.
+PLAZO_MINIMO_CALIBRACION_ANIOS: Final[float] = 0.30
+
+#: Umbral de RMSE (en bps de tasa) para la calibración contra precios de mercado.
+#: Más holgado que :data:`RMSE_MAXIMO_BPS` porque ahí se ajusta contra una curva ya
+#: suavizada y acá contra precios crudos de instrumentos individuales. El valor
+#: medido sobre la muestra de referencia es 3.8 bps.
+RMSE_MAXIMO_BPS_MERCADO: Final[float] = 8.0
+
+#: Tolerancia al reproducir los yields publicados por el proveedor de precios, en
+#: bps. El error medido con las convenciones verificadas es de 0.02 a 0.08 bps; el
+#: resto del margen absorbe el redondeo a tres decimales de la pantalla.
+TOLERANCIA_YIELD_PROVEEDOR_BPS: Final[float] = 0.5
 
 #: Timeout por request HTTP, en segundos.
 TIMEOUT_HTTP: Final[float] = 30.0

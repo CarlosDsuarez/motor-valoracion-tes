@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+from collections import Counter
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -32,6 +33,12 @@ import requests
 
 from motor_tes import config
 from motor_tes.config import BaseDia, SerieSuameca
+from motor_tes.instrumentos import (
+    Cotizacion,
+    InstrumentoCotizado,
+    InstrumentoTES,
+    TipoInstrumento,
+)
 
 __all__ = [
     "ErrorFuenteDatos",
@@ -50,6 +57,11 @@ __all__ = [
 ]
 
 Origen = Literal["api", "manual_export"]
+
+#: Si la fuente se puede redistribuir. Las restringidas quedan registradas en el
+#: manifest con su SHA256 y su cantidad de filas —así la procedencia sigue siendo
+#: verificable— pero sin ruta de archivo, porque el archivo no se versiona.
+Licencia = Literal["abierta", "restringida"]
 
 #: Plazo en días de las series IBR, que forman el tramo limpio de la curva COP.
 #: Se publican como tasa nominal base 360.
@@ -103,6 +115,15 @@ class EsquemaInesperadoError(ErrorFuenteDatos):
 
 class FuenteManualAusenteError(ErrorFuenteDatos):
     """Falta el archivo que debe aportarse a mano (curva cero cupón TES)."""
+
+
+class FuenteLicenciadaAusenteError(ErrorFuenteDatos):
+    """Falta el archivo de cotizaciones licenciadas, que no se versiona.
+
+    Es esperable en cualquier clon del repositorio: los precios son de un proveedor
+    comercial. Se levanta en vez de degradar a datos simulados, para que el pipeline se
+    detenga con un mensaje accionable en lugar de producir una curva inventada.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +180,7 @@ def _registrar_procedencia(
     filas: int,
     origen: Origen,
     archivo: Path | None = None,
+    licencia: Licencia = "abierta",
 ) -> None:
     """Guarda el snapshot crudo y anota su procedencia en ``data/manifest.json``.
 
@@ -170,9 +192,12 @@ def _registrar_procedencia(
         origen: ``"api"`` si se descargó automáticamente, ``"manual_export"`` si lo
             aportó una persona.
         archivo: Ruta del snapshot. Si es ``None`` se escribe ``data/raw/<clave>.json``.
+        licencia: ``"abierta"`` si el dato se puede versionar. Con ``"restringida"`` se
+            registran el SHA256 y las filas pero **no** la ruta, porque el archivo se
+            queda fuera del repositorio.
     """
     config.DIR_DATOS_CRUDOS.mkdir(parents=True, exist_ok=True)
-    if archivo is None:
+    if archivo is None and licencia == "abierta":
         archivo = config.DIR_DATOS_CRUDOS / f"{clave}.json"
         archivo.write_bytes(contenido)
 
@@ -183,7 +208,12 @@ def _registrar_procedencia(
         "sha256": hashlib.sha256(contenido).hexdigest(),
         "filas": filas,
         "origen": origen,
-        "archivo": str(archivo.relative_to(config.RAIZ_PROYECTO)),
+        "licencia": licencia,
+        "archivo": (
+            None
+            if licencia == "restringida"
+            else str(archivo.relative_to(config.RAIZ_PROYECTO))
+        ),
     }
     config.RUTA_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     config.RUTA_MANIFEST.write_text(
@@ -770,3 +800,229 @@ def construir_nodos_curva_cop(
 
     nodos = pd.concat([ibr, tes], ignore_index=True)
     return nodos.sort_values("plazo_anios").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Instrumentos soberanos y sus cotizaciones
+# ---------------------------------------------------------------------------
+
+#: Columnas que debe traer el CSV de fichas de instrumentos.
+_COLUMNAS_INSTRUMENTOS: Final[tuple[str, ...]] = (
+    "ric",
+    "etiqueta",
+    "tipo",
+    "cupon",
+    "vencimiento",
+)
+
+#: Columnas que debe traer el CSV de cotizaciones.
+_COLUMNAS_COTIZACIONES: Final[tuple[str, ...]] = (
+    "ric",
+    "fecha",
+    "bid",
+    "ask",
+    "bid_yield",
+    "ask_yield",
+)
+
+_INSTRUCCIONES_COTIZACIONES = """
+Falta el archivo de cotizaciones y no hay forma de calibrar la curva de mercado sin él.
+
+Los precios provienen de un proveedor comercial, así que NO se versionan: cualquier
+clon del repositorio arranca sin ellos. El motor se detiene acá a propósito, en vez de
+inventar datos o caer en silencio a la curva del Banco de la República.
+
+Para aportar el dato:
+
+  1. Exportá las cotizaciones de los instrumentos listados en
+     {instrumentos}
+  2. Guardá un CSV en:
+     {ruta}
+  3. Con estas columnas, tasas en decimal y precios limpios por 100 de nominal:
+     ric,fecha,bid,ask,bid_yield,ask_yield
+
+Las columnas ask y ask_yield pueden ir vacías si no hay punta vendedora. La fecha es
+la de esa cotización en particular: si un instrumento cotizó otro día, va su día, no
+el del resto de la muestra.
+
+Del archivo solo se registran en data/manifest.json el SHA256, la cantidad de filas y
+la licencia. La ruta no se anota, porque el archivo se queda fuera del repositorio.
+
+Sin cotizaciones, la curva del Banco de la República sigue funcionando:
+    python -m motor_tes.cli calibrate --fuente banrep
+""".strip()
+
+
+def cargar_instrumentos_tes(ruta: Path | None = None) -> list[InstrumentoTES]:
+    """Lee las fichas de referencia de los instrumentos soberanos.
+
+    Identificador, cupón y vencimiento son hechos públicos de un emisor soberano, así
+    que este archivo sí se versiona. Los precios van aparte, en
+    :func:`cargar_cotizaciones_tes`.
+
+    Args:
+        ruta: CSV de fichas. Por defecto :data:`~motor_tes.config.RUTA_INSTRUMENTOS_TES`.
+
+    Returns:
+        Las fichas en el orden del archivo.
+
+    Raises:
+        FuenteManualAusenteError: Si el archivo no existe.
+        EsquemaInesperadoError: Si faltan columnas, si un tipo no se reconoce o si el
+            archivo está vacío.
+    """
+    ruta = config.RUTA_INSTRUMENTOS_TES if ruta is None else ruta
+    if not ruta.exists():
+        raise FuenteManualAusenteError(
+            f"No encontré las fichas de instrumentos en {ruta}. Es un archivo "
+            f"versionado: si falta, probablemente se borró por error."
+        )
+
+    tabla = pd.read_csv(ruta, dtype={"ric": str, "etiqueta": str, "tipo": str})
+    faltantes = [c for c in _COLUMNAS_INSTRUMENTOS if c not in tabla.columns]
+    if faltantes:
+        raise EsquemaInesperadoError(
+            f"A {ruta} le faltan columnas: {faltantes}. Esperaba "
+            f"{list(_COLUMNAS_INSTRUMENTOS)}."
+        )
+    if tabla.empty:
+        raise EsquemaInesperadoError(f"{ruta} no tiene ninguna ficha.")
+
+    instrumentos: list[InstrumentoTES] = []
+    for fila in tabla.itertuples(index=False):
+        try:
+            tipo = TipoInstrumento(str(fila.tipo).strip().upper())
+        except ValueError as exc:
+            raise EsquemaInesperadoError(
+                f"{ruta}: '{fila.tipo}' no es un tipo de instrumento reconocido "
+                f"({[t.value for t in TipoInstrumento]}) en la fila de {fila.ric}."
+            ) from exc
+        instrumentos.append(
+            InstrumentoTES(
+                ric=str(fila.ric).strip(),
+                etiqueta=str(fila.etiqueta).strip(),
+                tipo=tipo,
+                cupon=float(fila.cupon),
+                vencimiento=pd.Timestamp(fila.vencimiento).date(),
+            )
+        )
+    return instrumentos
+
+
+def cargar_cotizaciones_tes(
+    ruta: Path | None = None, registrar: bool = True
+) -> list[Cotizacion]:
+    """Lee las cotizaciones licenciadas y registra su procedencia sin publicarlas.
+
+    Args:
+        ruta: CSV de cotizaciones. Por defecto
+            :data:`~motor_tes.config.RUTA_COTIZACIONES_TES`.
+        registrar: Si es ``True``, anota SHA256, filas y licencia en el manifest.
+
+    Returns:
+        Las cotizaciones en el orden del archivo.
+
+    Raises:
+        FuenteLicenciadaAusenteError: Si el archivo no está, con las instrucciones para
+            aportarlo.
+        EsquemaInesperadoError: Si faltan columnas o el archivo está vacío.
+    """
+    ruta = config.RUTA_COTIZACIONES_TES if ruta is None else ruta
+    if not ruta.exists():
+        raise FuenteLicenciadaAusenteError(
+            _INSTRUCCIONES_COTIZACIONES.format(
+                ruta=ruta, instrumentos=config.RUTA_INSTRUMENTOS_TES
+            )
+        )
+
+    contenido = ruta.read_bytes()
+    tabla = pd.read_csv(ruta, dtype={"ric": str})
+    faltantes = [c for c in _COLUMNAS_COTIZACIONES if c not in tabla.columns]
+    if faltantes:
+        raise EsquemaInesperadoError(
+            f"A {ruta} le faltan columnas: {faltantes}. Esperaba "
+            f"{list(_COLUMNAS_COTIZACIONES)}."
+        )
+    if tabla.empty:
+        raise EsquemaInesperadoError(f"{ruta} no tiene ninguna cotización.")
+
+    def opcional(valor: Any) -> float | None:
+        return None if pd.isna(valor) else float(valor)
+
+    cotizaciones = [
+        Cotizacion(
+            ric=str(fila.ric).strip(),
+            fecha=pd.Timestamp(fila.fecha).date(),
+            bid=float(fila.bid),
+            ask=opcional(fila.ask),
+            bid_yield=float(fila.bid_yield),
+            ask_yield=opcional(fila.ask_yield),
+        )
+        for fila in tabla.itertuples(index=False)
+    ]
+
+    if registrar:
+        _registrar_procedencia(
+            clave="cotizaciones_tes",
+            url=str(ruta.name),
+            contenido=contenido,
+            filas=len(cotizaciones),
+            origen="manual_export",
+            licencia="restringida",
+        )
+    return cotizaciones
+
+
+def construir_instrumentos_cotizados(
+    ruta_instrumentos: Path | None = None,
+    ruta_cotizaciones: Path | None = None,
+    registrar: bool = True,
+) -> list[InstrumentoCotizado]:
+    """Cruza fichas con cotizaciones y devuelve la canasta lista para calibrar.
+
+    El cruce es por RIC y es estricto en los dos sentidos: una cotización sin ficha
+    significa que falta describir el instrumento, y una ficha sin cotización significa
+    que la muestra de precios está incompleta. Las dos situaciones detienen el
+    pipeline en vez de calibrar sobre una canasta recortada en silencio.
+
+    Args:
+        ruta_instrumentos: CSV de fichas.
+        ruta_cotizaciones: CSV de cotizaciones.
+        registrar: Si es ``True``, anota la procedencia de las cotizaciones.
+
+    Returns:
+        La canasta ordenada por plazo al vencimiento ascendente.
+
+    Raises:
+        FuenteLicenciadaAusenteError: Si faltan las cotizaciones.
+        EsquemaInesperadoError: Si el cruce por RIC no es completo en ambos sentidos.
+    """
+    instrumentos = cargar_instrumentos_tes(ruta_instrumentos)
+    cotizaciones = cargar_cotizaciones_tes(ruta_cotizaciones, registrar=registrar)
+
+    por_ric = {i.ric: i for i in instrumentos}
+    if len(por_ric) != len(instrumentos):
+        conteo = Counter(i.ric for i in instrumentos)
+        repetidos = sorted(ric for ric, n in conteo.items() if n > 1)
+        raise EsquemaInesperadoError(
+            f"Hay fichas repetidas para los mismos RIC: {repetidos}."
+        )
+
+    sin_ficha = sorted({c.ric for c in cotizaciones} - por_ric.keys())
+    if sin_ficha:
+        raise EsquemaInesperadoError(
+            f"Hay cotizaciones sin ficha de instrumento: {sin_ficha}. Agregalas a "
+            f"{config.RUTA_INSTRUMENTOS_TES} o sacalas del archivo de precios."
+        )
+    sin_precio = sorted(por_ric.keys() - {c.ric for c in cotizaciones})
+    if sin_precio:
+        raise EsquemaInesperadoError(
+            f"Hay instrumentos sin cotización: {sin_precio}. La muestra de precios "
+            f"está incompleta; el motor no calibra sobre una canasta recortada."
+        )
+
+    canasta = [
+        InstrumentoCotizado(instrumento=por_ric[c.ric], cotizacion=c)
+        for c in cotizaciones
+    ]
+    return sorted(canasta, key=lambda c: c.plazo_anios)

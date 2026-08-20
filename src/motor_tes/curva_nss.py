@@ -33,11 +33,11 @@ Convenciones
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, Iterable, Sequence
+from typing import Callable, Final, Iterable, Sequence
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy.optimize import least_squares
+from scipy.optimize import OptimizeResult, least_squares
 
 from motor_tes.config import UMBRAL_TAYLOR
 
@@ -368,6 +368,102 @@ class ResultadoCalibracion:
 _SEMILLAS_LAMBDA: Final[tuple[float, ...]] = (0.5, 1.0, 2.0, 3.5, 5.0, 8.0, 12.0)
 
 
+def _ajustar_multistart(
+    residuales: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+    svensson: bool,
+    nivel_inicial: float,
+    pendiente_inicial: float,
+    semillas_lambda: Iterable[float] | None = None,
+    n_observaciones: int | None = None,
+    nombre_observaciones: str = "observaciones",
+) -> tuple[NSSParams, OptimizeResult, int]:
+    """Corre el multi-start de NSS sobre una función de residuales cualquiera.
+
+    La superficie objetivo de NSS tiene **mínimos locales en las escalas temporales**:
+    arrancar de un único punto es el error clásico de esta calibración y produce
+    ajustes que parecen razonables pero no son el óptimo. Por eso se barre una rejilla
+    de ``(lambda1, lambda2)`` y se conserva el arranque con menor suma de residuales al
+    cuadrado.
+
+    Vive separado de :func:`calibrar_nss` porque el motor calibra de dos maneras: sobre
+    tasas publicadas y sobre precios de instrumentos. Las dos comparten cotas, semillas
+    y canonicalización, y tenerlas en un solo lugar evita que se separen con el tiempo.
+
+    Args:
+        residuales: Función que recibe el vector de parámetros —seis con Svensson,
+            cuatro con Nelson-Siegel— y devuelve el vector de residuales a minimizar.
+        svensson: ``True`` para calibrar los 6 parámetros; ``False`` fija ``beta3 = 0``.
+        nivel_inicial: Semilla de ``beta0``, típicamente la tasa del plazo más largo.
+        pendiente_inicial: Semilla de ``beta1``, típicamente la tasa más corta menos el
+            nivel.
+        semillas_lambda: Rejilla de arranque para las escalas temporales. Por defecto
+            :data:`_SEMILLAS_LAMBDA`.
+        n_observaciones: Cantidad de observaciones, solo para el mensaje de error.
+        nombre_observaciones: Cómo llamarlas en ese mensaje.
+
+    Returns:
+        Terna ``(params, ajuste, n_arranques)`` con los parámetros canónicos, el
+        resultado crudo de ``least_squares`` del mejor arranque y cuántos se probaron.
+
+    Raises:
+        RuntimeError: Si ningún arranque converge.
+    """
+    # Cotas amplias pero acotadas: las tasas nominales COP pueden ser altas, pero
+    # |beta| > 1 (100%) o lambda > 30 años no describen una curva de mercado.
+    if svensson:
+        lo = np.array([-1.0, -1.0, -1.0, -1.0, 0.05, 0.05])
+        hi = np.array([1.0, 1.0, 1.0, 1.0, 30.0, 30.0])
+    else:
+        lo = np.array([-1.0, -1.0, -1.0, 0.05])
+        hi = np.array([1.0, 1.0, 1.0, 30.0])
+
+    semillas = tuple(semillas_lambda) if semillas_lambda is not None else _SEMILLAS_LAMBDA
+    arranques: list[NDArray[np.float64]] = []
+    for l1 in semillas:
+        if svensson:
+            for l2 in semillas:
+                if l2 <= l1:
+                    continue  # canonicalizamos exigiendo lambda1 < lambda2
+                arranques.append(
+                    np.array([nivel_inicial, pendiente_inicial, 0.0, 0.0, l1, l2])
+                )
+        else:
+            arranques.append(np.array([nivel_inicial, pendiente_inicial, 0.0, l1]))
+
+    mejor = None
+    mejor_ssr = np.inf
+    for x0 in arranques:
+        x0_acotado = np.clip(x0, lo, hi)
+        try:
+            ajuste = least_squares(
+                residuales, x0_acotado, bounds=(lo, hi), method="trf", max_nfev=5000
+            )
+        except (ValueError, np.linalg.LinAlgError):
+            continue
+        ssr = float(np.sum(ajuste.fun**2))
+        if ssr < mejor_ssr:
+            mejor, mejor_ssr = ajuste, ssr
+
+    if mejor is None:
+        sobre = (
+            f" sobre {n_observaciones} {nombre_observaciones}"
+            if n_observaciones is not None
+            else ""
+        )
+        raise RuntimeError(
+            f"Ningún arranque del multi-start convergió{sobre}. "
+            "Revisá que las tasas estén en decimal y los plazos en años."
+        )
+
+    if svensson:
+        params = NSSParams.from_array(mejor.x)
+    else:
+        b0, b1, b2, l1 = mejor.x
+        params = NSSParams(float(b0), float(b1), float(b2), 0.0, float(l1), float(l1))
+
+    return params, mejor, len(arranques)
+
+
 def calibrar_nss(
     plazos: ArrayLike,
     tasas: ArrayLike,
@@ -442,56 +538,15 @@ def calibrar_nss(
         candidato = NSSParams(b0, b1, b2, b3, l1, l2)
         return (np.asarray(tasa_cero_cupon(t, candidato)) - y) * raiz_w
 
-    # Cotas amplias pero acotadas: las tasas nominales COP pueden ser altas, pero
-    # |beta| > 1 (100%) o lambda > 30 años no describen una curva de mercado.
-    if svensson:
-        lo = np.array([-1.0, -1.0, -1.0, -1.0, 0.05, 0.05])
-        hi = np.array([1.0, 1.0, 1.0, 1.0, 30.0, 30.0])
-    else:
-        lo = np.array([-1.0, -1.0, -1.0, 0.05])
-        hi = np.array([1.0, 1.0, 1.0, 30.0])
-
-    nivel_inicial = float(y[np.argmax(t)])
-    pendiente_inicial = float(y[np.argmin(t)] - nivel_inicial)
-
-    semillas = tuple(semillas_lambda) if semillas_lambda is not None else _SEMILLAS_LAMBDA
-    arranques: list[NDArray[np.float64]] = []
-    for l1 in semillas:
-        if svensson:
-            for l2 in semillas:
-                if l2 <= l1:
-                    continue  # canonicalizamos exigiendo lambda1 < lambda2
-                arranques.append(
-                    np.array([nivel_inicial, pendiente_inicial, 0.0, 0.0, l1, l2])
-                )
-        else:
-            arranques.append(np.array([nivel_inicial, pendiente_inicial, 0.0, l1]))
-
-    mejor = None
-    mejor_ssr = np.inf
-    for x0 in arranques:
-        x0_acotado = np.clip(x0, lo, hi)
-        try:
-            ajuste = least_squares(
-                residuales, x0_acotado, bounds=(lo, hi), method="trf", max_nfev=5000
-            )
-        except (ValueError, np.linalg.LinAlgError):
-            continue
-        ssr = float(np.sum(ajuste.fun**2))
-        if ssr < mejor_ssr:
-            mejor, mejor_ssr = ajuste, ssr
-
-    if mejor is None:
-        raise RuntimeError(
-            f"Ningún arranque del multi-start convergió sobre {t.size} nodos. "
-            "Revisá que las tasas estén en decimal y los plazos en años."
-        )
-
-    if svensson:
-        params = NSSParams.from_array(mejor.x)
-    else:
-        b0, b1, b2, l1 = mejor.x
-        params = NSSParams(float(b0), float(b1), float(b2), 0.0, float(l1), float(l1))
+    params, mejor, n_arranques = _ajustar_multistart(
+        residuales,
+        svensson=svensson,
+        nivel_inicial=float(y[np.argmax(t)]),
+        pendiente_inicial=float(y[np.argmin(t)] - y[np.argmax(t)]),
+        semillas_lambda=semillas_lambda,
+        n_observaciones=t.size,
+        nombre_observaciones="nodos",
+    )
 
     ajustadas = np.asarray(tasa_cero_cupon(t, params), dtype=float)
     residual_bps = (ajustadas - y) / UN_BP
@@ -506,7 +561,7 @@ def calibrar_nss(
         tasas_ajustadas=ajustadas,
         exito=bool(mejor.success),
         n_evaluaciones=int(mejor.nfev),
-        n_arranques=len(arranques),
+        n_arranques=n_arranques,
         svensson=svensson,
     )
 
