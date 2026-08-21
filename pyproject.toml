@@ -32,8 +32,13 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --strict-markers"
+# Los tests importan siempre el src de ESTE árbol, no el que apunte el
+# editable install del venv. Sin esto, correr la suite dentro de un git
+# worktree probaría en silencio el código del árbol principal.
+pythonpath = ["src"]
 markers = [
     "red: requiere acceso a red (endpoints públicos de Banrep / datos.gov.co / NY Fed)",
     "quantlib: requiere QuantLib instalado",
     "manual: requiere el export manual del XLSX de curva cero cupón TES",
+    "licenciado: requiere el archivo local de cotizaciones licenciadas, que no se versiona",
 ]

@@ -7,7 +7,7 @@ PYTHON      := ./.venv/bin/python
 PYTHON_BASE := python3.13
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test cov fetch calibrate validate excel xlsm todo limpiar
+.PHONY: help setup test cov fetch calibrate curvas validate excel xlsm todo limpiar
 
 help:  ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -28,8 +28,11 @@ cov:  ## Corre la suite con reporte de cobertura
 fetch:  ## Descarga las fuentes y registra procedencia en data/manifest.json
 	$(PYTHON) -m motor_tes.cli fetch
 
-calibrate:  ## Calibra la curva y muestra los residuales por nodo
+calibrate:  ## Calibra las curvas y muestra los residuales
 	$(PYTHON) -m motor_tes.cli calibrate
+
+curvas:  ## Contrasta la curva de fondeo con la de mercado plazo por plazo
+	$(PYTHON) -m motor_tes.cli curvas
 
 validate:  ## Genera validation/reporte_validacion.md con gráficos y benchmark
 	$(PYTHON) -m motor_tes.cli validate

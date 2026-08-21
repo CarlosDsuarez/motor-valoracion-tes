@@ -7,15 +7,30 @@
 > Autor: Carlos Suárez
 
 Implementación de un motor de valoración de renta fija en pesos colombianos y de
-derivados de tasa de cambio, construido sobre datos públicos del Banco de la República,
-la Superintendencia Financiera y la Reserva Federal de Nueva York. El objetivo de la
-investigación es doble: **reproducir con rigor la metodología que una mesa de mercado de
-capitales usa a diario**, y **cuantificar el costo de los atajos** que suelen tomarse al
-implementarla (convenciones de conteo de días, número de nodos, extrapolación).
+derivados de tasa de cambio. El objetivo de la investigación es doble: **reproducir con
+rigor la metodología que una mesa de mercado de capitales usa a diario**, y **cuantificar
+el costo de los atajos** que suelen tomarse al implementarla (convenciones de conteo de
+días, número de nodos, extrapolación).
 
-Validación externa: los factores de descuento y los precios forward coinciden con
-**QuantLib** a precisión de máquina (1e-16). Las discrepancias residuales están medidas y
-atribuidas a una causa concreta, no toleradas bajo un umbral generoso.
+El motor mantiene **dos curvas COP** y cada una trabaja en su dominio. La de **fondeo**
+sale de datos públicos —IBR del Banco de la República y sus nodos de TES cero cupón— y
+alimenta la paridad cubierta. La **soberana** se calibra contra precios de mercado de doce
+instrumentos y descuenta bonos. Separarlas no es redundancia: son riesgos de crédito
+distintos y cubren plazos distintos, y confundirlas es uno de los atajos que este trabajo
+mide.
+
+Las cotizaciones vienen de un proveedor comercial y **no se versionan**; sí van al
+repositorio las fichas de los instrumentos, los parámetros calibrados y los agregados de
+ajuste. Todo lo demás —IBR, TRM, SOFR, curva cero cupón publicada— es público y se
+descarga solo. Ver [Qué se versiona y qué no](#qué-se-versiona-y-qué-no).
+
+Validación externa en dos frentes. Contra **QuantLib**, los factores de descuento y los
+precios forward coinciden a precisión de máquina (1e-16). Contra el **mercado**, las
+convenciones de cotización reproducen las tasas publicadas de los quince instrumentos con
+un error máximo de 0,08 bps —y de 0,02 bps en los bonos—, lo que exigió identificar el
+exponente *street*/ISMA: descontar con ACT/365 transcurrido deja un sesgo sistemático de
+−1,07 bps. Las discrepancias residuales están medidas y atribuidas a una causa concreta,
+no toleradas bajo un umbral generoso.
 
 ---
 
@@ -106,10 +121,18 @@ capturar curvas con doble joroba:
 
 $$z(t) = \beta_0 + \beta_1 f_1\!\left(\tfrac{t}{\lambda_1}\right) + \beta_2 f_2\!\left(\tfrac{t}{\lambda_1}\right) + \beta_3 f_2\!\left(\tfrac{t}{\lambda_2}\right)$$
 
-Más flexibilidad no es gratis. Con seis parámetros y seis nodos observados el sistema tiene
-**cero grados de libertad**: el ajuste perfecto está garantizado por construcción y el RMSE
-deja de ser evidencia de calidad. Este proyecto mide ese efecto y por eso usa
-Nelson-Siegel como modelo por defecto (ver [Resultados](#resultados)).
+Más flexibilidad no es gratis, y cuánto cuesta depende de cuántas observaciones haya. Con
+seis parámetros y seis nodos el sistema tiene **cero grados de libertad**: el ajuste perfecto
+está garantizado por construcción y el RMSE deja de ser evidencia de calidad. Por eso la
+curva de fondeo, que se arma con seis nodos publicados, usa Nelson-Siegel de cuatro
+parámetros.
+
+La curva soberana se calibra contra doce instrumentos, así que le sobran seis grados de
+libertad y ahí Svensson sí se justifica. Y no solo ajusta mejor: produce una curva **más
+suave** que Nelson-Siegel sobre los mismos datos, de modo que no se está comprando ajuste a
+costa de forma. El mismo modelo es la elección equivocada en un caso y la correcta en el
+otro; lo que cambia es la cantidad de información disponible (ver
+[Resultados](#resultados)).
 
 ### 5. Calibración: por qué el multi-start no es opcional
 
@@ -191,6 +214,55 @@ mercado y el de paridad es precisamente la señal que una mesa monitorea.
 
 ---
 
+### 9. Calibrar contra precios, no contra tasas publicadas
+
+Hay dos formas de ajustar una curva paramétrica y no son equivalentes.
+
+La primera toma nodos de una curva ya publicada y busca los parámetros que los reproducen.
+Es cómoda, pero cuando el emisor de esos nodos ya los suavizó con Nelson-Siegel el ejercicio
+es parcialmente circular: se ajusta un modelo a la salida de ese mismo modelo. Un RMSE bajo
+mide qué tan parecidas son dos parametrizaciones, no qué tan bien describe el mercado.
+
+La segunda descuenta los flujos de instrumentos individuales con la curva candidata y compara
+contra el precio de pantalla. No hay suavizado previo de por medio: el residual es distancia
+a una cotización.
+
+**Qué se minimiza.** El residual del instrumento `i` es el error de precio dividido por su
+duración:
+
+```
+r_i = (PV_modelo_i − precio_sucio_i) / D_i
+```
+
+No el error de precio crudo, y la razón es de escala. Un desvío de un punto básico en tasa
+mueve el precio de un bono a 30 años unas quince veces más que el de uno a 2 años, así que
+minimizar precio a secas le entrega la calibración a la parte larga. Medido sobre la muestra
+de este repositorio: ponderando por precio, los instrumentos cortos quedan con errores de 130
+a 190 bps; ponderando por duración, de unos 60. Dividir por la duración deja el residual en
+unidades de tasa —es la aproximación de primer orden del error de yield—, de modo que el RMSE
+sigue leyéndose en puntos básicos y es comparable entre las dos formas de calibrar.
+
+**Las convenciones importan más de lo que parece.** Para que el residual signifique algo, el
+precio del modelo tiene que estar construido con la misma convención con la que el mercado
+cotiza. Las dos que usa este motor están verificadas contra las tasas publicadas:
+
+- **Letras:** interés simple ACT/365, `y = (100/P − 1) · 365/días`.
+- **Bonos:** compuesto anual con exponente *street* / ISMA. El cupón `j` —contando desde 0
+  para el próximo— se descuenta a `j + f`, con `f = días al próximo cupón / días del período
+  de cupón vigente`.
+
+El exponente ISMA no es un detalle. Descontando con ACT/365 transcurrido, o sea `t = días/365`,
+los diez bonos de la muestra quedan con un sesgo sistemático de **−1,07 bps** contra la tasa
+publicada. Con el exponente ISMA el error máximo baja a **0,02 bps**. El devengo se calcula
+ACT/365; se probó también ACT/ACT dentro del período y a esta precisión es indistinguible, así
+que lo que discrimina es el exponente, no el devengo.
+
+Ojo con no mezclar: la convención ISMA sirve **solo** para traducir precio ↔ tasa cotizada, que
+es como habla la pantalla. El descuento contra la curva cero cupón sigue siendo
+`DF(t) = (1 + z(t))^−t` con `t` en años ACT/365. Son dos cosas distintas.
+
+---
+
 ## Casos de aplicación en el sector real
 
 Todas las cifras salen de la corrida del motor con datos del **2026-08-19/20**
@@ -265,9 +337,11 @@ dentro de Excel al instante, sin que el operador salga de su hoja de cálculo.
 Las entidades vigiladas por la Superintendencia Financiera deben valorar sus posiciones a
 precios de mercado con periodicidad diaria. Eso exige una curva reproducible y auditable:
 el motor deja registro en `data/manifest.json` de **URL exacta, timestamp, SHA256, número
-de filas y origen** de cada insumo, y distingue explícitamente lo que se descargó
-automáticamente de lo que aportó una persona. Si una fuente falla, el pipeline se detiene
-en lugar de producir números que parecen reales.
+de filas, origen y licencia** de cada insumo, y distingue explícitamente lo que se descargó
+automáticamente de lo que aportó una persona. De las fuentes cuya licencia impide
+redistribuirlas registra el hash y las filas pero no la ruta: la procedencia queda
+auditable sin publicar el dato. Si una fuente falla, el pipeline se detiene en lugar de
+producir números que parecen reales.
 
 ### Caso 6 — Detección de desalineaciones
 
@@ -305,7 +379,7 @@ redondeo.
 > `make validate` regenera [`validation/reporte_validacion.md`](validation/reporte_validacion.md)
 > con procedencia, residuales, gráficos y benchmark recalculados.
 
-### Curva COP calibrada
+### Curva de fondeo (IBR + nodos del Banco de la República)
 
 | Plazo | Tasa E.A. observada | Ajustada | Residual | Fuente |
 |---:|---:|---:|---:|---|
@@ -319,7 +393,92 @@ redondeo.
 **Nelson-Siegel (4 parámetros):** RMSE **3,25 bps**, residual máximo 4,39 bps, 2 grados de
 libertad. Sin forwards instantáneas negativas y con factores de descuento monótonos.
 
-### Por qué no Svensson
+### Curva de mercado (calibrada contra precios)
+
+Quince instrumentos soberanos reales —cinco letras y diez bonos, de 6 días a 31,6 años—
+cotizados el 2026-08-19. Se ajustan **doce**: los tres más cortos quedan fuera por la razón
+que se explica más abajo.
+
+| Modelo | Instrumentos | Grados de libertad | RMSE | Residual máx. | `max \|z''\|` |
+|---|---:|---:|---:|---:|---:|
+| Nelson-Siegel (4p) | 12 | 8 | 4,36 bps | 7,12 bps | 1,8367 |
+| **Svensson (6p)** | 12 | **6** | **3,82 bps** | 7,22 bps | **0,5437** |
+
+Acá Svensson sí se justifica, y por primera vez: con doce observaciones quedan seis grados de
+libertad, así que el ajuste ya no está garantizado de antemano. Y a diferencia del caso de
+seis nodos, ajusta mejor **y** produce una curva más suave —un tercio de la curvatura máxima
+de Nelson-Siegel—, de modo que no se está comprando ajuste a costa de forma.
+
+| Plazo | 1 a | 2 a | 3 a | 5 a | 7 a | 10 a | 15 a | 20 a | 25 a | 30 a |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Tasa E.A. | 12,050 % | 12,062 % | 12,102 % | 12,073 % | 12,027 % | 11,987 % | 11,992 % | 12,043 % | 12,111 % | 12,178 % |
+
+Las convenciones reproducen las tasas publicadas de los quince instrumentos con un error
+máximo de **0,08 bps**, y de 0,02 bps en los bonos. Sin forwards instantáneas negativas y con
+factores de descuento monótonos hasta 30 años.
+
+El RMSE de 3,82 bps se compara contra una media horquilla mediana de 3,22 bps: cinco de los
+doce instrumentos quedan estrictamente dentro de la horquilla de mercado. O sea que el ajuste
+es del orden del costo de transacción, aunque no queda dentro de él en todos los puntos.
+
+### Por qué el tramo corto no se ajusta
+
+Los identificadores de las letras son etiquetas de plazo constante, pero los instrumentos
+detrás derivaron: la "1M" vence en 6 días, la "3M" en 34 y la "6M" en 62. Ese tramo cotiza
+entre 10,3 % y 11,0 % mientras que todo lo de 9 meses en adelante está entre 12,0 % y 12,6 %.
+
+Es un quiebre real —el segmento de dinero no se conecta de forma suave con la curva de
+bonos— y Nelson-Siegel-Svensson no tiene la flexibilidad para atravesarlo. Forzarlo no
+degrada solo el tramo corto:
+
+| Conjunto ajustado | n | gl | RMSE | Residual máx. |
+|---|---:|---:|---:|---:|
+| Los 15 instrumentos | 15 | 9 | 32,2 bps | 66,5 bps |
+| Solo los 10 bonos | 10 | 4 | 2,8 bps | 6,8 bps |
+| **12 (bonos + letras de 9M y 1 año)** | 12 | 6 | **3,8 bps** | **7,2 bps** |
+
+Con los quince, el nodo de 2 años se desvía 24 bps y el ajuste deja de ser útil en toda la
+curva. Con solo los diez bonos el ajuste es bueno pero nada sostiene el extremo corto y la
+curva extrapola hacia 19,9 % a tres meses. Los doce son el punto de equilibrio, y además el
+mejor condicionado de los tres.
+
+Las tres letras cortas **igual se cargan y se valoran**: el reporte publica su residual, que
+va de 366 a 519 bps. Es la evidencia del quiebre, no un dato descartado en silencio.
+
+La contrapartida está declarada: **la curva de mercado no sirve por debajo de 161 días**.
+
+### Dos curvas, cada una en su dominio
+
+El motor mantiene las dos y no son intercambiables:
+
+| | Curva de fondeo | Curva de mercado |
+|---|---|---|
+| Insumo | IBR overnight/1M/3M + nodos TES publicados | precios de 12 instrumentos soberanos |
+| Cobertura | 1 día a 10 años | 161 días a 31,6 años |
+| Riesgo | interbancario | soberano |
+| Alimenta | forwards USD/COP, paridad cubierta | valoración de bonos, Excel, UDFs de VBA |
+
+Separarlas es lo que resuelve la vieja limitación de mezclar una curva interbancaria con una
+soberana dentro de un mismo objeto. La curva de mercado extrapolada por debajo de su
+instrumento más corto se dispara —**16,27 % a 30 días contra una letra real en 10,72 %**, o
+sea 554 bps— así que usarla para forwards de plazo corto sería un error grande. Y descontar
+un TES a 20 años con la curva de fondeo arrastraría el spread interbancario. Cada una en lo
+suyo.
+
+**El contraste entre ambas:**
+
+| Plazo | 1 a | 2 a | 3 a | 5 a | 7 a | 10 a | 15 a | 20 a | 25 a | 30 a |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Fondeo − mercado | +34,8 | +38,0 | +30,0 | +24,3 | +23,7 | +23,7 | +20,1 | +13,3 | +5,6 | −1,8 |
+
+Entre 3 y 20 años la curva de fondeo queda **+22,5 bps** por encima de la de mercado, con
+desviación estándar de 5,5 bps. Un desplazamiento casi paralelo a lo largo de diecisiete años
+de curva no es un error de modelo: es una diferencia de nivel en el insumo. Los nodos TES del
+Banco de la República son del 2026-07-31 y las cotizaciones del 2026-08-19 — **19 días de
+diferencia**. Es exactamente el tipo de desalineación que el motor ahora reporta en vez de
+promediar.
+
+### Por qué no Svensson en la curva de fondeo
 
 | Modelo | Grados de libertad | RMSE | `max \|z''\|` (suavidad) |
 |---|---:|---:|---:|
@@ -334,8 +493,9 @@ marca explícitamente en vez de dejar que un `RMSE = 0,000` se lea como excelenc
 NSS (6p) | RMSE=0.000 bps | nodos=6 | gl=0  [INTERPOLA: 0 grados de libertad, RMSE no informativo]
 ```
 
-Este es el argumento central para preferir el modelo de menor dimensión con las fuentes
-públicas hoy disponibles.
+Este es el argumento para preferir el modelo de menor dimensión **sobre los seis nodos
+publicados**. Con los doce instrumentos de la curva de mercado el cálculo se invierte, y ahí
+Svensson sí paga: ver más arriba.
 
 ### Contraste con QuantLib
 
@@ -363,16 +523,23 @@ no se reinterpreten después como un error.
 
 ### Forwards USD/COP
 
+Calculados sobre la **curva de fondeo**, que es la que corresponde: la paridad cubierta se
+financia a tasa interbancaria y esa curva arranca en el overnight.
+
 | Plazo | Forward | Puntos | Devaluación E.A. | DV01 COP | Theta/día | Extrapolado |
 |---:|---:|---:|---:|---:|---:|:---:|
-| 30 d | 3.072,78 | +19,30 | 7,97 % | 0,0225 | 0,6457 | no |
-| 90 d | 3.112,59 | +59,11 | 8,09 % | 0,0684 | 0,6645 | no |
-| 180 d | 3.174,80 | +121,32 | 8,22 % | 0,1395 | 0,6901 | **sí** |
-| 360 d | 3.305,81 | +252,33 | 8,38 % | 0,2901 | 0,7349 | **sí** |
+| 30 d | 3.072,86 | +19,38 | 8,00 % | 0,0225 | 0,6484 | no |
+| 90 d | 3.112,83 | +59,35 | 8,12 % | 0,0684 | 0,6672 | no |
+| 180 d | 3.175,28 | +121,80 | 8,25 % | 0,1395 | 0,6928 | **sí** |
+| 360 d | 3.306,77 | +253,29 | 8,42 % | 0,2902 | 0,7377 | **sí** |
 
 La columna `extrapolado` marca los plazos que exceden el último nodo automatizado (90 días
 de IBR): ahí la tasa COP proviene de proyectar la forma paramétrica, no de interpolar entre
 datos observados. Es una distinción que un motor de producción debe hacer explícita.
+
+Usar acá la curva soberana sería un error grande y medido: extrapolada por debajo de su
+instrumento más corto da **16,27 % a 30 días contra una letra real en 10,72 %**, o sea 554
+bps. Es la razón por la que el motor mantiene las dos curvas separadas.
 
 Todas las griegas se calculan de forma analítica y se contrastan contra diferencias finitas
 en la suite de pruebas.
@@ -389,8 +556,30 @@ make setup
 make test
 ```
 
-96 pruebas. Otros comandos: `make calibrate`, `make validate`, `make excel`, `make xlsm`,
-`make help`.
+176 pruebas. Otros comandos: `make calibrate`, `make curvas`, `make validate`, `make excel`,
+`make xlsm`, `make help`.
+
+Las dos curvas se calibran juntas por defecto. Para trabajar con una sola:
+
+```bash
+python -m motor_tes.cli calibrate --fuente mercado
+```
+
+```bash
+python -m motor_tes.cli calibrate --fuente banrep
+```
+
+`--fuente banrep` es el único que corre sin las cotizaciones licenciadas, así que es el
+camino para un clon limpio del repositorio. Para ver el contraste entre ambas curvas plazo
+por plazo:
+
+```bash
+python -m motor_tes.cli curvas
+```
+
+Sin la bandera `--svensson`, cada curva usa el modelo que sus datos soportan: Svensson de 6
+parámetros para la de mercado, que tiene doce instrumentos, y Nelson-Siegel de 4 para la de
+fondeo, que con seis nodos interpolaría.
 
 ---
 
@@ -407,6 +596,7 @@ el pipeline se detiene.
 | Socrata — datos.gov.co | TRM histórica (control cruzado) | automático |
 | Reserva Federal de Nueva York | SOFR (pata USD) | automático |
 | Curva cero cupón TES | 1, 5 y 10 años, pesos y UVR, desde 2003 | **manual** |
+| Cotizaciones de instrumentos soberanos | 15 letras y bonos, de 6 días a 31 años | **manual, licenciado** |
 
 IDs de serie verificados: TRM = 1, IBR overnight/1M/3M = 241/242/243, DTF 90d = 65,
 CDT 90/180/360 = 238/239/240, tasa de política = 59.
@@ -414,6 +604,28 @@ CDT 90/180/360 = 238/239/240, tasa de política = 59.
 > **La API de SUAMECA no está documentada públicamente.** Su URL base y los nombres de
 > método se extrajeron del bundle Angular del portal. Puede cambiar sin aviso; el fetcher
 > está construido para fallar de forma explícita si eso ocurre.
+
+### Qué se versiona y qué no
+
+Las cotizaciones de instrumentos vienen de un proveedor comercial y este repositorio es
+público, así que la fuente está partida en dos según lo que la licencia permite redistribuir:
+
+| Archivo | Contenido | ¿Se versiona? |
+|---|---|---|
+| `data/instrumentos_tes.csv` | RIC, cupón y vencimiento | **sí** — son hechos públicos de un emisor soberano |
+| `data/privado/cotizaciones_tes.csv` | precios y tasas bid/ask por fecha | **no** — dato licenciado |
+
+De la fuente restringida el manifest registra SHA256, cantidad de filas y licencia, pero no
+la ruta: la procedencia queda verificable sin publicar el dato. En el reporte de validación
+van **agregados** —RMSE, residual máximo, grados de libertad, cuántos instrumentos caen dentro
+de la horquilla— y no la tabla instrumento por instrumento, porque el residual de cada uno,
+combinado con los parámetros publicados de la curva, permite reconstruir el precio observado.
+El detalle se escribe en `validation/privado/`, que tampoco se versiona.
+
+Un clon del repositorio arranca sin las cotizaciones. `calibrate --fuente mercado` se detiene
+ahí con `FuenteLicenciadaAusenteError` y las instrucciones para aportar el archivo; nunca
+inventa datos ni cae en silencio a la otra curva. La curva de fondeo sigue funcionando sola
+con `--fuente banrep`.
 
 ### Por qué la curva TES es manual
 
@@ -436,6 +648,21 @@ Python calibra en batch y escribe los parámetros en el rango con nombre `NSS_PA
 UDFs de VBA los leen y valoran. **El VBA es autosuficiente**: no llama a Python, así que el
 libro funciona en cualquier máquina con Excel.
 
+El libro lleva **dos** rangos de parámetros, uno por curva:
+
+| Rango | Curva | Para qué |
+|---|---|---|
+| `NSS_PARAMS` | soberana, calibrada contra precios | descontar bonos; es la que leen las UDFs por defecto |
+| `NSS_PARAMS_FONDEO` | interbancaria IBR + nodos publicados | paridad cubierta y forwards |
+
+Las UDFs de forward aceptan el rango como argumento, así que hay que pasarles
+`NSS_PARAMS_FONDEO` explícitamente: la curva soberana extrapola mal en plazos cortos y los
+forwards del libro llegan a 30 días.
+
+La hoja `Nodos` lleva **agregados** de la calibración, no el detalle por instrumento: el
+`.xlsm` se versiona con las macros incorporadas, y publicar el residual de cada instrumento
+junto a los parámetros permitiría reconstruir la cotización licenciada.
+
 | UDF | Devuelve |
 |---|---|
 | `TASA_CERO_CUPON(t; NSS_PARAMS)` | tasa cero cupón a `t` años |
@@ -449,7 +676,14 @@ libro funciona en cualquier máquina con Excel.
 
 La hoja `Validacion` pone lado a lado el valor calculado en Python y la fórmula VBA que debe
 reproducirlo, con la diferencia en una tercera columna. Es el control de paridad entre ambas
-implementaciones.
+implementaciones. Verificado sobre la curva de mercado:
+
+```
+?TASA_CERO_CUPON(5)
+ 0.12073013031300431
+```
+
+idéntico dígito a dígito a `tasa_cero_cupon(5.0, params_mercado)` en Python.
 
 ### Armar el `.xlsm`
 
@@ -479,12 +713,14 @@ guardar como `.xlsm`.
 src/motor_tes/
 ├── config.py              # endpoints, ids verificados, convenciones, rutas
 ├── data_fetch.py          # conectores + registro de procedencia
-├── curva_nss.py           # calibración, curva, duración y DV01
+├── curva_nss.py           # curva, calibración sobre tasas, duración y DV01
+├── instrumentos.py        # letras y bonos: cronograma, devengo, precio <-> TIR
+├── calibracion_mercado.py # calibración contra precios y contraste de curvas
 ├── pricer_forward.py      # paridad cubierta y griegas
 ├── benchmark_quantlib.py  # contraste contra QuantLib
 ├── export_excel.py        # puente a Excel
-└── cli.py                 # fetch / calibrate / validate / excel
-tests/                     # 96 pruebas
+└── cli.py                 # fetch / calibrate / curvas / validate / excel
+tests/                     # 176 pruebas
 data/manifest.json         # procedencia con SHA256 por fuente
 excel/vba/                 # UDFs en VBA
 validation/                # reporte autogenerado y figuras
@@ -494,35 +730,63 @@ validation/                # reporte autogenerado y figuras
 
 ## Supuestos y limitaciones
 
-Declarados a propósito, porque condicionan la interpretación de los resultados:
+Declarados a propósito, porque condicionan la interpretación de los resultados.
 
-1. **Se mezcla curva interbancaria con soberana.** El tramo corto es IBR y el largo TES. Es
-   la construcción habitual de mesa, pero no son el mismo riesgo de crédito: el spread entre
-   tramos queda absorbido dentro de la forma de la curva en lugar de modelarse aparte.
-2. **Circularidad parcial.** El Banco de la República ya publica sus nodos de TES ajustados
-   con Nelson-Siegel. Recalibrar sobre ellos no demuestra gran cosa; por eso **la validación
-   real de la calibración es la recuperación de parámetros sintéticos**: se genera una curva
-   con parámetros conocidos, se calibra sobre esos puntos y se verifica que se recupera la
-   original, con desvío máximo de 1e-6 bps.
-3. **Sin calendario de días hábiles.** Los flujos se ubican en fracciones de año exactas. Es
-   el origen medido de la discrepancia contra QuantLib y la extensión natural hacia
-   producción.
-4. **Los CDT se excluyen como nodos.** El CDT a 180 días osciló entre 9,98 % y 10,65 % en
-   una semana mientras el de 360 días iba de 11,74 % a 12,41 %: son promedios ponderados por
-   monto emitido, reflejan qué bancos captaron cada día y no una estructura de plazos.
-   Incluirlos elevaba el RMSE a 59 bps. Quedan disponibles con
-   `construir_nodos_ibr(incluir_cdt=True)`.
-5. **Cobertura de plazos.** Solo seis nodos, con un vacío entre 90 días y 1 año. El motor
-   marca como `extrapolado` todo forward que exceda el último nodo automatizado.
-6. **El bono de referencia no está verificado.** No existe fuente pública gratuita de
-   *reference data* de TES (cupón, vencimiento, ISIN). Los ejemplos del repositorio son
-   ilustrativos y deben contrastarse contra Infovalmer o la Bolsa de Valores de Colombia
-   antes de usarse sobre una posición real.
-7. **Paridad cubierta como referencia teórica.** El modelo entrega el forward de no
-   arbitraje. Las desviaciones del mercado respecto de ese valor —el *cross-currency
-   basis*— son un fenómeno documentado y no un error del modelo.
-8. **Frecuencia de actualización.** IBR, TRM y SOFR son diarios. La curva TES depende de que
-   alguien vuelva a exportar el archivo del portal.
+**Resueltas por la calibración contra precios.** Se dejan escritas porque explican por qué el
+motor está armado como está:
+
+1. ~~Se mezcla curva interbancaria con soberana.~~ Ya no dentro de un mismo objeto. El motor
+   mantiene dos curvas separadas: la de fondeo (IBR + nodos publicados) y la soberana
+   (precios de instrumentos). Cada una alimenta lo que le corresponde. Lo que queda es una
+   decisión explícita de qué curva usar para qué, no un spread absorbido en silencio dentro
+   de la forma de una curva única.
+2. ~~Circularidad parcial.~~ La curva soberana se calibra contra precios de pantalla, no
+   contra nodos que el emisor ya suavizó con Nelson-Siegel. La recuperación de parámetros
+   sintéticos sigue siendo la prueba central de la calibración, pero ahora se hace **sobre
+   precios**: se generan bonos y letras valorados con una curva conocida y se verifica que
+   calibrar sobre esos precios la devuelve.
+3. ~~Cobertura de plazos: seis nodos con un vacío entre 90 días y 1 año.~~ La curva soberana
+   se ajusta sobre doce instrumentos entre 161 días y 31,6 años. El vacío ahora está en otro
+   lado, y es el punto 4.
+
+**Vigentes:**
+
+4. **La curva de mercado no cubre plazos cortos.** Se ajusta desde 161 días. Por debajo
+   extrapola y se dispara: a 30 días da 16,27 % contra una letra real en 10,72 %. Para ese
+   tramo está la curva de fondeo, que arranca en el overnight. El motor expone el rango
+   observado y no descuenta fuera de él sin avisar, pero **la responsabilidad de elegir curva
+   es de quien la usa**.
+5. **El segmento de dinero queda sin modelar.** Las tres letras de menos de 62 días se cargan
+   y se reportan, pero no entran a ninguna curva paramétrica. Cotizan 150 a 200 bps por
+   debajo del resto y ningún Nelson-Siegel-Svensson atraviesa ese quiebre. Modelarlas
+   requeriría un segmento aparte, que este motor no tiene.
+6. **Fechas de cotización heterogéneas.** Cada instrumento descuenta desde su propia fecha.
+   En la muestra de referencia una letra cotiza un día antes que el resto, así que la curva
+   supone implícitamente que el mercado no se movió en ese día. El reporte publica la
+   dispersión de fechas para que el supuesto quede medido en vez de asumido.
+7. **Los precios no se versionan.** Vienen de un proveedor comercial. Un clon del repositorio
+   no puede reproducir la curva de mercado sin aportar el archivo; el motor se detiene con una
+   excepción tipada y las instrucciones. Lo que sí está en el repositorio son las fichas de
+   los instrumentos, los parámetros calibrados y los agregados de ajuste.
+8. **Sin calendario de días hábiles.** Los flujos se ubican en fechas de aniversario exactas,
+   sin ajustar por días no hábiles. Es el origen medido de la discrepancia contra QuantLib y
+   la extensión natural hacia producción.
+9. **Los CDT se excluyen como nodos.** El CDT a 180 días osciló entre 9,98 % y 10,65 % en una
+   semana mientras el de 360 días iba de 11,74 % a 12,41 %: son promedios ponderados por monto
+   emitido, reflejan qué bancos captaron cada día y no una estructura de plazos. Incluirlos
+   elevaba el RMSE a 59 bps. Quedan disponibles con `construir_nodos_ibr(incluir_cdt=True)`.
+10. **El ajuste no queda dentro de la horquilla en todos los puntos.** Cinco de los doce
+    instrumentos caen estrictamente dentro de su media horquilla. El RMSE de 3,82 bps es del
+    orden del costo de transacción —la media horquilla mediana es 3,22 bps— pero afirmar que
+    la curva pasa por dentro del mercado en todo plazo sería falso.
+11. **Paridad cubierta como referencia teórica.** El modelo entrega el forward de no
+    arbitraje. Las desviaciones del mercado respecto de ese valor —el *cross-currency basis*—
+    son un fenómeno documentado y no un error del modelo.
+12. **Frecuencia de actualización.** IBR, TRM y SOFR son diarios. Los nodos TES dependen de
+    que alguien vuelva a exportar el archivo del portal, y las cotizaciones de que alguien
+    aporte el CSV. El reporte fecha la corrida con **el insumo más viejo**, no con el más
+    nuevo: una curva es tan fresca como el dato más rancio que la alimenta, y reportar el más
+    reciente escondería justamente la obsolescencia que hay que vigilar.
 
 ---
 
